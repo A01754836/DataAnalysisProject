@@ -1,0 +1,695 @@
+---
+title: "Data Analytics 2025"
+author: "Final Project"
+date: "Names: Neli Arlette González Pérez,
+ Sadıkhan Görmüş,
+ Yasir Özer,
+ Antonio Fauci,
+ Oxana Gral"
+
+
+output: 
+  html_document:
+    theme:
+      bootswatch: flatly
+      base_font: {google: "Open Sans"}
+      size: 0.55rem              
+      heading_font:
+        google: "Lato"
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+    highlight: textmate
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(caret)
+library(rpart)
+library(rpart.plot)
+```
+-----------------------------
+
+
+ds <- read.csv("/Users/sadonico/Desktop/dataAnalysisProject/gaming_data.csv")
+colnames(ds)
+
+# -DESCRIPTIVE ANALYTICS
+
+In this section, we describe the main numerical variables of the game: average playtime, number of sessions, levels completed per session and weekly spending.
+We report the mean as a measure of central tendency and the standard deviation as a measure of dispersion, following the definitions seen in class. 
+Then we compare these metrics for Freemium and Premium users, commenting which group tends to play more (playtime, sessions), progress more (levels) and spend more (spending).
+
+```{r}
+#read the file
+ds <- read.csv("gaming_data.csv")
+colnames(ds)
+
+```
+
+
+## Descriptive metrics
+
+In this subsection, we calculate basic descriptive statistics for the main numerical variables of the game: playtime, sessions, levels and spending. We use the mean to describe the central tendency and the standard deviation to describe how much the values vary around the mean. We first look at the overall values for all players, and then we compare the same statistics for Freemium and Premium users separately.
+
+```{r}
+
+# Numerical variables we need
+num_vars <- c("playtime", "sessions", "levels", "spending")
+
+# Overall descriptive stats (mean + standard deviation)
+desc_overall <- data.frame(
+  variable = num_vars,
+  mean     = sapply(ds[num_vars], function(x) mean(x, na.rm = TRUE)),
+  sd       = sapply(ds[num_vars], function(x) sd(x, na.rm = TRUE))
+)
+
+library(kableExtra)
+
+desc_overall %>%
+  kable(digits = 2,
+        caption = "Overall mean and standard deviation for numerical variables") %>%
+  kable_styling(full_width = FALSE)
+
+library(dplyr)
+```
+Descriptive statistics by user type (Freemium / Premium)
+```{r}
+desc_by_type <- ds %>%
+  group_by(user_type) %>%
+  summarise(
+    mean_playtime   = mean(playtime, na.rm = TRUE),
+    sd_playtime     = sd(playtime,   na.rm = TRUE),
+    mean_sessions   = mean(sessions, na.rm = TRUE),
+    sd_sessions     = sd(sessions,   na.rm = TRUE),
+    mean_levels     = mean(levels,   na.rm = TRUE),
+    sd_levels       = sd(levels,     na.rm = TRUE),
+    mean_spending   = mean(spending, na.rm = TRUE),
+    sd_spending     = sd(spending,   na.rm = TRUE),
+    .groups = "drop"
+  )
+
+desc_by_type %>%
+  kable(digits = 2,
+        caption = "Mean and standard deviation by user type") %>%
+  kable_styling(full_width = FALSE)
+
+```
+
+
+## Game performance metrics
+
+In this subsection, we compute several game performance metrics: ARPU, ARPPU, conversion rate and an engagement index defined as playtime multiplied by number of sessions.  
+ARPU measures how much revenue, on average, each player generated during the week, while ARPPU focuses only on players who spent money.  
+The conversion rate is the proportion of players who made at least one purchase during the week.  
+The average engagement index summarises how intensively users played (combining playtime and number of sessions).
+
+```{r}
+# Total number of players
+n_players <- nrow(ds)
+
+# Total revenue (weekly in-game spending)
+total_revenue <- sum(ds$spending, na.rm = TRUE)
+
+# Identify paying users (here: spending > 0)
+ds$paying <- ds$spending > 0
+n_paying <- sum(ds$paying, na.rm = TRUE)
+
+# ARPU: Average Revenue Per User
+ARPU <- total_revenue / n_players
+
+# ARPPU: Average Revenue Per Paying User
+ARPPU <- total_revenue / n_paying
+
+# Conversion rate (to paying users), in percentage
+conversion_rate <- (n_paying / n_players) * 100
+
+# Engagement index for each player: playtime * sessions
+ds$engagement <- ds$playtime * ds$sessions
+
+# Average engagement index
+avg_engagement <- mean(ds$engagement, na.rm = TRUE)
+
+# Show the results in a table
+metrics <- data.frame(
+  metric = c("Number of players",
+             "Number of paying players",
+             "Total revenue (euros)",
+             "ARPU (euros per user)",
+             "ARPPU (euros per paying user)",
+             "Conversion rate (%)",
+             "Average engagement index (playtime * sessions)"),
+  value = c(n_players,
+            n_paying,
+            total_revenue,
+            ARPU,
+            ARPPU,
+            conversion_rate,
+            avg_engagement)
+)
+
+library(kableExtra)
+
+metrics %>%
+  kable(digits = 2, caption = "Key game performance metrics") %>%
+  kable_styling(full_width = FALSE)
+```
+
+------------------------------------------------
+
+# -VISUALS
+In this section, we visualise the main variables to understand player behavior using ggplot2.
+
+
+```{r}
+# First, we make sure the engagement index is calculated (as defined in section 1.2)
+# engagement = playtime * sessions
+# REPLACE 'df' WITH THE NAME OF YOUR DATASET VARIABLE IF NEEDED
+if(!"engagement" %in% colnames(ds)) {
+  ds$engagement <- ds$playtime * ds$sessions
+}
+```
+
+## Percentage of paying users (Premium vs Freemium)
+We start by analyzing the proportion of user types in our dataset.
+```{r}
+# Bar plot showing the count of each user type
+ggplot(ds, aes(x = user_type, fill = user_type)) +
+  geom_bar() +
+  labs(title = "Distribution of User Types (Premium vs Freemium)",
+       x = "User Type",
+       y = "Number of Players") +
+  theme_minimal()
+```
+
+Interpretation:
+This chart allows us to see the balance between Freemium and Premium players. [Add here if there are more Freemium than Premium players based on the graph].
+
+## Comparison of Group A vs Group B
+
+We compare the two groups (Control vs Experimental) in terms of Playtime and Engagement to see if the new features had an effect.
+
+Playtime distribution by Group
+```{r}
+# Boxplot of Playtime by Group
+ggplot(ds, aes(x = group, y = playtime, fill = group)) +
+  geom_boxplot() +
+  labs(title = "Comparison of Playtime: Group A vs Group B",
+       x = "Group",
+       y = "Playtime (minutes)") +
+  theme_minimal()
+```
+
+Engagement distribution by Group
+```{r}
+# Boxplot of Engagement by Group
+ggplot(ds, aes(x = group, y = engagement, fill = group)) +
+  geom_boxplot() +
+  labs(title = "Comparison of Engagement Index: Group A vs Group B",
+       x = "Group",
+       y = "Engagement Index") +
+  theme_minimal()
+```
+
+Interpretation:
+The boxplots show the median and spread of data. [Observe if the median line is higher for Group B in both graphs. If yes, it suggests the new version might improve engagement].
+
+## Relationship between Playtime and Spending
+
+We investigate if players who play longer tend to spend more money.
+
+```{r}
+# Scatter plot: Playtime vs Spending
+ggplot(ds, aes(x = playtime, y = spending)) +
+  geom_point(color = "darkblue", alpha = 0.6) +
+  labs(title = "Relationship between Playtime and Spending",
+       x = "Playtime (minutes)",
+       y = "Spending (Euros)") +
+  geom_smooth(method = "lm", se = FALSE, color = "red") + # Adds a simple trend line
+  theme_minimal()
+```
+
+Interpretation:
+The scatter plot helps identify correlations. [If the dots go up from left to right, there is a positive correlation. If the red line is flat, there is no strong link].
+
+## Distribution of Spending
+
+Finally, we look at how spending is distributed among players.
+
+```{r}
+# Histogram of Spending
+ggplot(ds, aes(x = spending)) +
+  geom_histogram(binwidth = 5, fill = "orange", color = "white") +
+  labs(title = "Distribution of Weekly Spending",
+       x = "Spending (Euros)",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+Interpretation:
+This histogram shows the frequency of spending amounts. [Usually, in games, we see a high bar at 0 (non-payers) and a long tail to the right (whales/high spenders)].
+------------------------------------------------------------
+
+# -AB TESTING
+
+
+## Test 1
+
+### Research question
+
+Does the average weekly in-game spending differ between Freemium and Premium users ?
+But more precisely, do Premium users spend more on average than Freemium users ?
+
+### Hypotheses
+
+We compare the mean weekly spending between Freemium and Premium users.
+
+Let \(\mu_F\) be the mean spending of Freemium users and \(\mu_P\) be the mean spending of Premium users.
+
+- Null hypothesis \(H_0\): \(\mu_P \le \mu_F\)  
+  (Premium users do not spend more than Freemium users on average.)
+- Alternative hypothesis \(H_1\): \(\mu_P > \mu_F\)  
+  (Premium users spend more than Freemium users on average.)
+
+We use a significance level \(\alpha = 0.05\) (95% confidence level).
+
+Direction: This is a one-tailed test (upper/right tail) because the research question asks if Premium is higher than Freemium ($>$).
+
+### Type of test
+
+We have two independent groups (Freemium vs Premium) and a numerical variable (weekly spending), and we want to compare their means.  
+We therefore use a **two-sample t-test for independent samples**, with a **one-sided** alternative hypothesis (we test if Premium > Freemium).
+
+
+### Computations
+
+```{r}
+
+# 2) Create separate vectors for Freemium and Premium spending
+spend_freemium <- ds$spending[ds$user_type == "Freemium"]
+spend_premium  <- ds$spending[ds$user_type == "Premium"]
+
+# 3) Two-sample t-test (independent samples)
+# alternative = "greater" tests: mean(spend_premium) > mean(spend_freemium)
+t_spending_type <- t.test(spend_premium, spend_freemium,
+                          alternative = "greater")
+
+t_spending_type
+```
+
+### Interpretation
+
+From the descriptive statistics, Premium users have a higher mean weekly spending (25.84 €) than Freemium users (11.47 €), with relatively high variability in both groups.
+
+We can interpret the result of the t-test using the p-value from t_spending_type:
+
+Knowing that : 
+If the p-value is below 0.05, we reject the null hypothesis at the 5% significance level.
+In this case, we conclude that there is enough evidence to say that Premium users spend more on average than Freemium users.
+
+If the p-value is greater than or equal to 0.05, we do not reject the null hypothesis.
+In this case, we cannot conclude that Premium users spend more than Freemium users; the difference observed in the sample may be due to random variation.
+
+So in our data, the p-value is 0.012 (< 0.05), so we reject the null hypothesis and conclude that Premium users spend significantly more than Freemium users at the 95% confidence level.
+
+
+The Welch two-sample t-test gives a very small p-value (p = 0.0000218), which is far below the significance level 0.05. Therefore, we reject the null hypothesis at the 95% confidence level and conclude that Premium users spend significantly more on average than Freemium users.
+
+
+## Test 2
+
+The indie studio tested two different versions of the game on the current users. 
+The users labeled as A downloaded the standard version of the game, while users in group B downloaded a new version with an improved reward system.
+The designers believed that the new reward system will produce higher playtime among the users. 
+Can you search in the data whether there is evidence to do such claim with
+95\% confidence level?
+
+
+### Research question
+Is the average playtime of players in Group B (improved reward system) significantly higher than the average playtime of players in Group A (standard version)?
+
+### Hypotheses
+We compare the mean playtime between Group A (standard version) and Group B (new version).
+
+Let \(\mu_A\) be the mean playtime of Group A and \(\mu_B\) be the mean playtime of Group B.
+
+Null hypothesis \(H_0\): \(\mu_B \le \mu_A\)
+(Group B users do not play more than Group A users on average.)
+
+Alternative hypothesis \(H_1\): \(\mu_B > \mu_A\)
+(Group B users play more than Group A users on average.)
+
+We use a significance level \(\alpha = 0.05\) (95% confidence level).
+
+### Type of test
+We will perform a Two-Sample t-test for independent samples (Welch's t-test).
+
+Justification: We are comparing the means of two independent groups (different players in A and B). We do not assume equal variances (Welch assumption is safer and standard in R).
+
+Direction: This is a one-tailed test (upper/right tail) because the research question asks if B is higher than A ($>$).
+
+
+### Computations
+```{r}
+# 1. Prepare the data
+# Using 'ds' as the dataset variable name
+playtime_A <- ds$playtime[ds$group == "A"]
+playtime_B <- ds$playtime[ds$group == "B"]
+
+# 2. Compute the t-test (Alternative = "greater" because H1 is B > A)
+test_result_2 <- t.test(playtime_B, playtime_A, alternative = "greater", conf.level = 0.95)
+
+# 3. Extract and compute specific values required by the methodology
+t_obs <- test_result_2$statistic       # Observed t-value
+df_val <- test_result_2$parameter      # Degrees of freedom
+p_value <- test_result_2$p.value       # P-value
+
+# 4. Compute the Critical Value (t_alpha)
+# For a one-tailed test (greater) at 95% confidence, alpha = 0.05.
+# We look for the value that leaves 5% in the upper tail.
+alpha <- 0.05
+t_critical <- qt(alpha, df = df_val, lower.tail = FALSE)
+
+# 5. Display the results
+cat("Observed t-value (t_obs):", t_obs, "\n")
+cat("Critical t-value (t_crit):", t_critical, "\n")
+cat("P-value:", p_value, "\n")
+
+# Show full test details
+test_result_2
+```
+
+
+### Interpretation
+From the descriptive statistics provided in the test output, Group B users have a higher mean playtime (64.81 minutes) than Group A users (55.50 minutes).
+
+We can interpret the result of the t-test using the p-value:
+
+In our data, the p-value is < 2.2e-16 (which is practically 0 and thus < 0.05), so we reject the null hypothesis and conclude that Group B users play significantly more than Group A users at the 95% confidence level.
+
+The Welch two-sample t-test gives a very small p-value, which is far below the significance level 0.05. Therefore, we reject the null hypothesis at the 95% confidence level and conclude that the new reward system (Group B) leads to significantly higher average playtime than the standard version (Group A).
+
+
+
+
+
+# -REGRESSION ANALYSIS
+
+
+## Regression model with numerical variables 
+In this section, we'll build a regression model…
+
+```{r}
+model_num <- lm(spending ~ playtime + sessions + levels + friends + skill_score,
+                data = ds)
+summary(model_num)
+
+```
+ 
+## Explanation
+
+Based on the regression model results, This model is not precise . R square value equal to 0.0025, In explanation : " R square =0  then x gives no information about y. and the variance of y is the same with or without knowing x ". Our R square value far from 1 and close to 0 .It shows us this model is not precise
+
+Moreover, numerical variables used here are poor predictors of spending behavior. according to p value, independant variables do not have influence on dependent variable which is spending.Because all p values bigger than 0.05 . 
+
+
+
+## Prediction
+Prediction for a hypothetical player
+```{r}
+new_user <- data.frame(
+  playtime = 200,
+  sessions = 10,
+  levels = 5,
+  friends = 100,
+  skill_score = 60
+)
+
+predict(model_num, newdata = new_user)
+
+```
+
+## Simulation
+Simulation varying playtime 
+```{r}
+playtime_seq <- seq(100, 1000, by = 50)
+
+sim_data <- data.frame(
+  playtime = playtime_seq,
+  sessions = 10,
+  levels = 5,
+  friends = 100,
+  skill_score = 60
+)
+
+sim_data$pred_spending <- predict(model_num, newdata = sim_data)
+
+sim_data
+
+```
+
+
+Plot of the simulated predictions
+```{r}
+ggplot(sim_data, aes(x = playtime, y = pred_spending)) +
+  geom_line(linewidth = 1.2) +
+  labs(
+    title = "Predicted Spending vs Playtime",
+    x = "Playtime",
+    y = "Predicted Spending (€)"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+## Regression model with numerical and categorical variables 
+```{r}
+model_full <- lm(spending ~ playtime + sessions + levels + friends + skill_score +
+                   group + user_type,
+                 data = ds)
+
+summary(model_full)
+
+```
+
+
+## Explanation
+
+In this chapter, we add two more category which are group and user type in to regression model for explain the spending of users. Results show that almost all independant variables do not have significant effect on spending. However , user_type is highly significant.user_type 's p value equal to = 1.31e-07 * which is smaller than 0.05 .
+
+Furthermore , model is not precise, even though adding categorical variables improved it slightly compared to the previous model.
+
+Therefore , R square is increased when we add two more categories in to our regression model. Except this categories R square was "0.002502", after add it R square equal to "0.02149".
+
+-----------------------------------------------------------------------
+
+
+# -CLASSIFICATION ANALYSIS
+
+## Data splits
+
+The dataset is randomly divided into training (70%) and testing (30%) parts. The model will learn patterns from the training set and then be evaluated on the test set.
+
+```{r}
+set.seed(123)
+
+train_index <- createDataPartition(ds$user_type, p = 0.7, list = FALSE)
+
+train <- ds[train_index, ]
+test  <- ds[-train_index, ]
+
+```
+
+## Decision tree 
+
+A decision tree model is trained to predict user_type using several numeric features such as playtime, sessions, levels, friends, skill_score, spending, and group.
+
+```{r}
+tree_model <- rpart(user_type ~ playtime + sessions + levels + friends +
+                      skill_score + spending + group,
+                    data = train, method = "class")
+
+```
+
+## Tree Evaluation 
+
+Prediction
+```{r}
+tree_pred <- predict(tree_model, test, type="class")
+accuracy_tree <- mean(tree_pred == test$user_type)
+accuracy_tree
+```
+
+
+## Confusion matrix
+
+A confusion matrix is generated to check how many users were correctly or incorrectly predicted. The model predicts all users as Freemium, so it completely misses Premium users.
+
+```{r}
+common_levels <- union(levels(tree_pred), levels(factor(test$user_type)))
+
+tree_pred_factor <- factor(tree_pred, levels = common_levels)
+test_factor      <- factor(test$user_type, levels = common_levels)
+
+caret::confusionMatrix(tree_pred_factor, test_factor)
+```
+
+
+## Explanation
+
+The decision tree model was evaluated on the test data comparingset by its predictions with the true user_type labels.The model achived an accuracy of approximately 96.4. (which is percentage of Freemium users, I explained why they are equal below 5.4 explanations)
+
+The tree predicted all users as Freemium meaning that it completely fails to identify premium users.
+
+
+## Tree visualization
+
+The decision tree has no splits; it only contains a root node. This happens because the data is extremely imbalanced — almost all users are Freemium — so the best “simple” decision is to classify everyone as Freemium.
+
+```{r}
+rpart.plot(tree_model, type = 3, extra = 104, fallen.leaves = TRUE)
+
+```
+
+## Explanation
+
+Decision tree didnt make any splits and consists of only a single root node. this means that the model classifies all users as Freemium regardless of their another metrics. MAin reason is in dataset more than %96,33 of the users set as Freemium , only %3,6 percent setted as Premium (45 of 1500 are Premium users , 1445 of 1500 are Freemium users ) 
+
+
+
+
+## K-NN Training algorithm
+
+Before training K-NN, the numeric features are normalized (centered and scaled).
+Then a K-Nearest Neighbors model is trained using cross-validation to find the best number of neighbors (k). The best model uses k = 23.
+
+```{r}
+preproc <- preProcess(train[,c("playtime","sessions","levels","friends",
+"skill_score","spending")],
+method=c("center","scale"))
+
+
+train_norm <- predict(preproc, train)
+test_norm  <- predict(preproc, test)
+
+set.seed(123)
+ctrl <- trainControl(method="cv", number=5)
+
+knn_model <- train(user_type ~ playtime + sessions + levels + friends +
+skill_score + spending + group,
+data=train_norm,
+method="knn",
+tuneLength=10,
+trControl=ctrl)
+
+knn_model
+
+
+```
+
+## K-NN Evaluation algorithm
+
+The K-NN model predicts user types for the test set. The accuracy is computed, and it is almost identical to the decision tree (≈96.04%).
+
+Prediction
+```{r}
+knn_pred <- predict(knn_model, newdata = test_norm)
+knn_pred
+```
+## Accuracy
+```{r}
+accuracy_knn <- mean(knn_pred == test$user_type)
+accuracy_knn
+```
+## Confusion matrix
+
+Just like the decision tree, K-NN also predicts all users as Freemium. Because Premium users are rare, the model fails to detect them.
+
+```{r}
+levels_ok <- union(levels(factor(knn_pred)), levels(factor(test$user_type)))
+
+knn_pred_f <- factor(knn_pred, levels = levels_ok)
+test_f     <- factor(test$user_type, levels = levels_ok)
+
+confusionMatrix(knn_pred_f, test_f)
+```
+
+## Explanation
+          
+          
+          
+        
+           (number of correct predictions)          433
+accuracy = -------------------------------    ====  ----  ==  0.964
+            (total number of test instances)        449
+            
+In the confusion matrix, our K-NN model correctly predicted all Freemium users, resulting in 433 Freemium-to-Freemium matches. However, it failed to predict any Premium users, as shown by the 0 Premium-to-Premium matches. Additionally, the model misclassified all 16 Premium users as Freemium, further confirming that the K-NN algorithm was unable to identify the Premium user type.            
+            
+Freemium users were correctly identified by the K-NN algorithm. This is consistent with the matrix, where 433 out of 433 Freemium users were correctly predicted as Freemium.
+However, the model fails completely to detect Premium users. All 16 Premium cases in the test set were misclassified as Freemium, resulting in Specificity = 0.0000. This indicates that while the classifier performs perfectly on the Freemium, it performs extremely poorly on the Premium.
+
+
+
+
+## 5.7 Evaluate and compare
+
+Both test type tree and KNN models achive high accuracy due to imbalance in the dataset. However both of test capable of identifying Premium users, as shown as sensivity 0 for the premium.
+
+
+ 
+---------------------------------
+
+# -CONCLUSIONS
+
+## Insights
+1. The dataset is strongly imbalanced, with the large majority of users being Freemium. Because of this, classification models achieved high accuracy but failed to detect Premium users.
+
+2. Premium users spend more money than Freemium users. The statistical test confirms that Premium spending is significantly higher at the 95 percent confidence level.
+
+3. Players in Group B show higher average playtime than players in Group A. The A/B test supports that the improved reward system increases playtime.
+
+4. Numerical gameplay variables such as playtime, sessions, levels, friends and skill score do not predict spending well. The regression model showed a very low R squared value.
+
+5. When categorical variables were added, user type became the only meaningful predictor of spending. Premium users consistently spend more.
+
+6. High accuracy in classification does not mean good performance. Both the decision tree and the K-NN model failed to identify Premium users, even though overall accuracy was high.
+
+7. For the studio, these results suggest focusing on improving reward systems, increasing conversion from Freemium to Premium, and collecting richer behavioural data for better modelling.
+
+## Learnings
+1. We learned how to build a complete analytical report using R and RMarkdown, combining code, visualisation and interpretation.
+
+2. We practised computing descriptive statistics and game-related metrics such as ARPU, ARPPU, conversion rate and engagement index.
+
+3. We learned how to formulate hypotheses, choose appropriate statistical tests and interpret the results in an A/B testing context.
+
+4. We gained experience building and interpreting regression models, understanding the meaning of coefficients, p values and R squared.
+
+5. We trained and evaluated classification models such as decision trees and K-NN, including preprocessing and cross-validation.
+
+6. We learned the importance of analysing class imbalance and why metrics like sensitivity and specificity are necessary in addition to accuracy.
+
+7. We improved our teamwork skills by organising tasks, integrating results and producing a consistent final report.
+
+
+-----------------
+
+# -DISTRIBUTION OF TASKS
+Antonio : 2. Visuals; 3.2 AB Testing/Test 2.
+
+Oxana : 1. Descriptive Analytics; 3.1,AB Testing/Test 1.
+
+Sadikhan: 4. Regression analysis (Regression model with numerical variables, Prediction, Simulation,  Regression model with numerical and categorical variables); 5. Classification analysis (Data splits, Decisión tree).
+
+Arlette: 5. Classification analysis (Tree Evaluation, Confusion matrix, Tree visualization, K-NN Training algorithm, K-NN Evaluation algorithm, Accuracy).
+
+Yasir : 6. Conclusions section (Insights and Learnings).
+
